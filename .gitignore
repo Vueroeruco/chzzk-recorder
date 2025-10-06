@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Project-specific ignores
+/deployment_backup/
+/chzzk_recorder/logs/
+/chzzk_recorder/recordings/
+/chzzk_recorder_logs/
+/chzzk_recorder_recordings/
+*.log
+config.json
+*.json
+!/chzzk_recorder/config/config.json.example

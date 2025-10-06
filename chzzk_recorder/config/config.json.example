@@ -1,0 +1,10 @@
+{
+    "CHZZK_ID": "YOUR_NAVER_ID",
+    "CHZZK_PW": "YOUR_NAVER_PASSWORD",
+    "TARGET_CHANNELS": [
+        "CHANNEL_ID_1",
+        "CHANNEL_ID_2"
+    ],
+    "DOWNLOAD_PATH": "/app/recordings",
+    "POLLING_INTERVAL_SECONDS": 30
+}

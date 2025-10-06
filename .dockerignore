@@ -1,0 +1,13 @@
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.log
+.venv
+.gemini
+
+# Exclude large data directories from build context
+chzzk_recorder/recordings
+chzzk_recorder/logs
+
+# Exclude sensitive session file from image
+chzzk_recorder/config/session.json

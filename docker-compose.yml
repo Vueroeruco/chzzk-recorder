@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  recorder:
+    build: .
+    container_name: chzzk_recorder
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./chzzk_recorder/config:/app/config
+      - ./chzzk_recorder/logs:/app/logs
+      - ./chzzk_recorder/recordings:/app/recordings
