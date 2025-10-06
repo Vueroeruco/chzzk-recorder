@@ -9,31 +9,39 @@
 - 설정, 로그, 녹화 영상 폴더를 분리하여 관리 용이
 - `.ts` 포맷으로 영상 저장
 
-## 🚀 설치 및 실행 방법
+## 🚀 시작하기 (Getting Started)
 
-이 프로젝트는 Docker 사용을 권장합니다.
+Docker 사용을 강력히 권장합니다. PC에 [Docker Desktop](https://www.docker.com/products/docker-desktop/)이 설치되어 있어야 합니다.
 
-1.  **리포지토리 클론**
-    ```bash
-    git clone https://github.com/Vueroeruco/chzzk-recorder.git
-    cd chzzk-recorder
-    ```
+### 1. 리포지토리 클론
+```bash
+git clone https://github.com/Vueroeruco/chzzk-recorder.git
+cd chzzk-recorder
+```
 
-2.  **설정 파일 준비**
-    - `chzzk_recorder/config/` 디렉토리로 이동합니다.
-    - `config.json.example` 파일을 복사하여 `config.json` 파일을 생성합니다.
-    - `config.json` 파일을 열어 아래 설명에 맞게 수정합니다.
-      - `streamers`: 녹화할 스트리머의 ID 목록을 추가합니다. (예: `"c1b852c6d15813a81f851c4a574c7382"`)
-      - `output_dir`: 녹화 파일이 저장될 컨테이너 내부 경로입니다. (기본값: `/app/recordings`)
-      - `log_dir`: 로그 파일이 저장될 컨테이너 내부 경로입니다. (기본값: `/app/logs`)
-      - `poll_interval_seconds`: 방송 상태를 확인하는 주기(초)입니다.
+### 2. 초기 설정 (최초 1회)
+`config.json` 설정 파일과 `session.json` 인증 파일을 생성하기 위해 최초 한 번만 실행하는 과정입니다.
 
-3.  **Docker 컨테이너 실행**
-    - 프로젝트의 최상위 디렉토리( `docker-compose.yml` 파일이 있는 곳)로 돌아옵니다.
-    - 아래 명령어를 실행하여 Docker 컨테이너를 백그라운드에서 시작합니다.
-    ```bash
-    docker-compose up -d
-    ```
+```bash
+python chzzk_recorder/setup.py
+```
+위 명령어를 실행하면, 터미널의 안내에 따라 아래의 과정을 진행하게 됩니다.
+1.  **네이버 아이디/비밀번호 입력**: Chzzk 인증에 사용됩니다.
+2.  **브라우저 로그인**: 자동으로 브라우저가 열립니다. 2단계 인증, 새로운 기기 등록 등 추가 인증이 필요하면 브라우저에서 완료해주세요.
+3.  **녹화 채널 선택**: 로그인 성공 후, 팔로우한 채널 목록에서 녹화를 원하는 채널을 번호로 선택합니다.
+4.  **저장 경로 설정**: 녹화된 영상이 저장될 경로를 지정합니다. (기본값 사용 가능)
+
+모든 과정이 성공적으로 완료되면 `chzzk_recorder/config/` 폴더 안에 `config.json`과 `session.json` 파일이 생성됩니다.
+
+### 3. 녹화 프로그램 실행
+초기 설정이 완료되었으면, 아래 명령어로 Docker 컨테이너를 백그라운드에서 실행합니다.
+
+```bash
+docker-compose up -d
+```
+이제 설정된 채널의 방송 시작을 자동으로 감지하고 녹화를 시작합니다.
+
+> **Note**: `watcher.py`가 6시간마다 자동으로 세션을 갱신하므로, `setup.py`를 다시 실행할 필요는 거의 없습니다. 만약 인증이 계속 실패하는 경우에만 `setup.py`를 다시 실행하여 `session.json`을 갱신해주세요.
 
 ## ⚙️ 관리
 
