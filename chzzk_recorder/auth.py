@@ -93,4 +93,4 @@ if __name__ == "__main__":
 
     print("--- Initial Setup or Manual Refresh ---")
     # When run directly, execute with headless=False for manual login.
-    get_session_cookies(config_path, session_path, headless=False)
+    get_session_cookies(config_path, session_path, headless=True)

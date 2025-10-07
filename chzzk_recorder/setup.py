@@ -74,7 +74,7 @@ def main():
             json.dump(temp_config, f)
 
         print("\nAttempting to log in to verify your credentials...")
-        login_success = get_session_cookies(config_path, session_path, headless=False)
+        login_success = get_session_cookies(config_path, session_path, headless=True)
 
         if login_success:
             print("\nLogin successful!")
