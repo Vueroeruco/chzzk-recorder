@@ -64,7 +64,7 @@ def fetch_live_details(channel):
 # === Main watcher loop ===
 def main():
     config = load_config()
-    channels = config.get("selected_channels", [])
+    channels = config.get("TARGET_CHANNELS", [])
     if not channels:
         log("No channels found in config.json (key: selected_channels)", "ERROR")
         return
