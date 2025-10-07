@@ -2,6 +2,7 @@
 import json
 import os
 import requests
+import time
 
 class ChzzkAPI:
     def __init__(self, config_dir):
