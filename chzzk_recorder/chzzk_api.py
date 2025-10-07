@@ -75,6 +75,7 @@ class ChzzkAPI:
         """
         Fetches live stream details for a given channel_id.
         Returns a dictionary with comprehensive stream info if live, otherwise None.
+        Includes debugging logs for non-live cases.
         """
         url = f"https://api.chzzk.naver.com/service/v1/channels/{channel_id}/live-detail"
         
@@ -85,10 +86,12 @@ class ChzzkAPI:
             content = data.get('content')
 
             if not content:
+                print(f"DEBUG: Channel {channel_id} appears offline. API response content was empty: {data}")
                 return None
 
             live_playback_json_str = content.get("livePlaybackJson")
             if not live_playback_json_str:
+                print(f"DEBUG: Channel {channel_id} appears offline. 'livePlaybackJson' is missing. Raw API response content: {content}")
                 return None
 
             # The presence of a valid m3u8 URL is the most reliable indicator of a live stream.
@@ -102,6 +105,7 @@ class ChzzkAPI:
                         break
 
             if not m3u8_url:
+                print(f"DEBUG: HLS m3u8 URL not found for channel {channel_id}. Raw live playback data: {live_playback_data}")
                 return None # No usable m3u8 URL found, so it's not live.
 
             # If we found a m3u8 URL, we consider it live.
