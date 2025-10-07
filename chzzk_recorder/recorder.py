@@ -61,7 +61,7 @@ def start_recording(live_details, config):
         print(f"  -> Starting recording...")
         print(f"  -> Output path: {output_path}")
 
-        session_path = os.path.join(base_dir, "config", "session.json")
+        session_path = "/app/config/session.json"
         headers = get_auth_headers(session_path)
 
         command = [
@@ -74,7 +74,7 @@ def start_recording(live_details, config):
             output_path
         ]
 
-        log_dir = os.path.join(base_dir, 'logs')
+        log_dir = '/app/logs'
         os.makedirs(log_dir, exist_ok=True)
         stdout_log = open(os.path.join(log_dir, f"{basename}_stdout.log"), 'w', encoding='utf-8')
         stderr_log = open(os.path.join(log_dir, f"{basename}_stderr.log"), 'w', encoding='utf-8')

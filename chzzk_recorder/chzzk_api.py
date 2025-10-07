@@ -71,57 +71,74 @@ class ChzzkAPI:
             print(f"Failed to decode JSON from response for {channel_id}. Response text: {response.text}")
             return None
 
-    def get_live_details(self, channel_id):
+    def get_live_details(self, channel_id, retries=3, delay=2):
         """
         Fetches live stream details for a given channel_id.
-        Returns a dictionary with comprehensive stream info if live, otherwise None.
-        Includes debugging logs for non-live cases.
+        Includes retry logic for temporary API inconsistencies.
         """
         url = f"https://api.chzzk.naver.com/service/v1/channels/{channel_id}/live-detail"
         
-        try:
-            response = requests.get(url, headers=self.headers)
-            response.raise_for_status()
-            data = response.json()
-            content = data.get('content')
+        for attempt in range(retries):
+            try:
+                response = requests.get(url, headers=self.headers, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                content = data.get('content')
 
-            if not content:
-                print(f"DEBUG: Channel {channel_id} appears offline. API response content was empty: {data}")
+                if not content:
+                    print(f"DEBUG: Channel {channel_id} appears offline. API response content was empty: {data}")
+                    # This is a definitive offline status, no need to retry.
+                    return None
+
+                # Adult channel check
+                if content.get("adult") and not self.headers.get("Cookie", "").__contains__("NID_SES"):
+                     print(f"WARNING: Channel {channel_id} is for adults and requires full authentication (NID_SES cookie). Skipping.")
+                     return None
+
+                live_playback_json_str = content.get("livePlaybackJson")
+                if not live_playback_json_str:
+                    # This could be a temporary state, especially if status is not 'ENDED'
+                    if content.get('status') == 'ENDED':
+                        print(f"DEBUG: Channel {channel_id} status is 'ENDED'. No retry needed.")
+                        return None # Stream has definitively ended.
+                    
+                    print(f"DEBUG: 'livePlaybackJson' is missing for channel {channel_id}, retrying... ({attempt + 1}/{retries})")
+                    time.sleep(delay)
+                    continue # Go to next attempt
+
+                live_playback_data = json.loads(live_playback_json_str)
+                m3u8_url = None
+                if live_playback_data.get("media") and isinstance(live_playback_data["media"], list):
+                    for media_item in live_playback_data["media"]:
+                        if media_item.get("mediaId", "").lower() == "hls":
+                            m3u8_url = media_item.get("path")
+                            break
+
+                if m3u8_url:
+                    # Success, return details
+                    return {
+                        "liveTitle": content.get("liveTitle"),
+                        "channelName": content.get("channel", {}).get("channelName"),
+                        "videoId": live_playback_data.get("meta", {}).get("videoId"),
+                        "m3u8_url": m3u8_url
+                    }
+                else:
+                    # m3u8_url not found, could be temporary
+                    print(f"DEBUG: HLS m3u8 URL not found for channel {channel_id}, retrying... ({attempt + 1}/{retries})")
+                    time.sleep(delay)
+                    continue # Go to next attempt
+
+            except requests.exceptions.RequestException as e:
+                print(f"An error occurred while fetching live details for {channel_id}: {e}, retrying... ({attempt + 1}/{retries})")
+                time.sleep(delay)
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"Failed to parse JSON from response for {channel_id}. Error: {e}. Response text: {response.text}")
+                # This is a critical error, no retry
                 return None
-
-            live_playback_json_str = content.get("livePlaybackJson")
-            if not live_playback_json_str:
-                print(f"DEBUG: Channel {channel_id} appears offline. 'livePlaybackJson' is missing. Raw API response content: {content}")
-                return None
-
-            # The presence of a valid m3u8 URL is the most reliable indicator of a live stream.
-            live_playback_data = json.loads(live_playback_json_str)
-            
-            m3u8_url = None
-            if live_playback_data.get("media") and isinstance(live_playback_data["media"], list):
-                for media_item in live_playback_data["media"]:
-                    if media_item.get("mediaId", "").lower() == "hls":
-                        m3u8_url = media_item.get("path")
-                        break
-
-            if not m3u8_url:
-                print(f"DEBUG: HLS m3u8 URL not found for channel {channel_id}. Raw live playback data: {live_playback_data}")
-                return None # No usable m3u8 URL found, so it's not live.
-
-            # If we found a m3u8 URL, we consider it live.
-            return {
-                "liveTitle": content.get("liveTitle"),
-                "channelName": content.get("channel", {}).get("channelName"),
-                "videoId": live_playback_data.get("meta", {}).get("videoId"),
-                "m3u8_url": m3u8_url
-            }
-
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred while fetching live details for {channel_id}: {e}")
-            return None
-        except (json.JSONDecodeError, TypeError) as e:
-            print(f"Failed to parse JSON from response for {channel_id}. Error: {e}. Response text: {response.text}")
-            return None
+        
+        # If all retries fail
+        print(f"All retries failed for channel {channel_id}. Assuming offline.")
+        return None
 
 if __name__ == '__main__':
     # Example usage:
