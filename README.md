@@ -66,4 +66,27 @@ docker-compose up -d
 -   `./chzzk_recorder/logs`: 애플리케이션 실행 로그가 저장됩니다.
 -   `./chzzk_recorder/recordings`: 녹화된 `.ts` 영상 파일이 저장됩니다.
 
-> **Note**: `docker-compose.yml` 설정에 따라 위 폴더들은 로컬 환경의 동일한 이름의 폴더와 연결(마운트)되어 있어, 컨테이너 외부에서도 파일에 접근할 수 있습니다.
+> **Note**: 위 폴더들은 `docker-compose.yml`의 `volumes` 설정에 따라 PC의 폴더와 실시간으로 연결되어 있습니다. 컨테이너는 항상 내부의 `/app/recordings` 경로에 녹화하지만, 실제 파일은 PC의 `./chzzk_recorder/recordings` 폴더에 저장됩니다.
+
+### 💡 녹화 저장 위치 변경하기
+
+녹화 파일을 다른 폴더(예: `D:\MyVideos`)에 저장하고 싶다면, `docker-compose.yml` 파일을 열어 `volumes` 섹션의 다음 부분을 수정하세요.
+
+```yaml
+# docker-compose.yml
+
+services:
+  recorder:
+    # ... (다른 설정들)
+    volumes:
+      - ./chzzk_recorder/config:/app/config
+      - ./chzzk_recorder/logs:/app/logs
+      # 아래 줄의 ':' 앞 부분을 원하는 PC 폴더 경로로 변경하세요.
+      - ./chzzk_recorder/recordings:/app/recordings # 이 줄을 수정
+```
+
+예를 들어 `D:\MyVideos`에 저장하려면 아래와 같이 변경합니다.
+
+```yaml
+      - D:\MyVideos:/app/recordings
+```

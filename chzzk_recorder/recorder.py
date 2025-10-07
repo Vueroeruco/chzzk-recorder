@@ -52,9 +52,9 @@ def start_recording(live_details, config):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         basename = f"{timestamp}_{safe_channel_name}_{safe_live_title}"
         
-        # Use DOWNLOAD_PATH from config, with a fallback to a local 'recordings' folder
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        download_dir = config.get("DOWNLOAD_PATH", os.path.join(base_dir, 'recordings'))
+        # The output path is fixed inside the container.
+        # The actual host path is determined by the volume mount in docker-compose.yml.
+        download_dir = "/app/recordings"
         os.makedirs(download_dir, exist_ok=True)
         output_path = os.path.join(download_dir, f"{basename}.ts")
 

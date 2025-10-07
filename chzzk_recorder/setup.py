@@ -99,39 +99,11 @@ def main():
         print(f"Failed to initialize API and select channels: {e}")
         return
 
-    # 3. Set Download Path
-    default_path = os.path.join(base_dir, 'recordings')
-    print(f"\nThe default download path is: {default_path}")
-    use_default = input("Do you want to use this path? (y/n): ").lower()
-    
-    download_path = default_path
-    if use_default != 'y':
-        while True:
-            new_path = input("Enter the new download path: ")
-            try:
-                # Test if path is valid and writable
-                os.makedirs(new_path, exist_ok=True)
-                test_file = os.path.join(new_path, 'test.tmp')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                download_path = new_path
-                print(f"Download path set to: {download_path}")
-                break
-            except Exception as e:
-                print(f"Error: The path '{new_path}' is not valid or not writable. {e}")
-                retry = input("Do you want to try a different path? (y/n): ").lower()
-                if retry != 'y':
-                    download_path = default_path
-                    print(f"Using default download path: {download_path}")
-                    break
-
-    # 4. Finalize and Save Config
+    # 3. Finalize and Save Config
     final_config = {
         "CHZZK_ID": chzzk_id,
         "CHZZK_PW": chzzk_pw,
         "TARGET_CHANNELS": target_channels,
-        "DOWNLOAD_PATH": download_path,
         "POLLING_INTERVAL_SECONDS": 30
     }
 
