@@ -3,6 +3,7 @@ import re
 import subprocess
 import datetime
 import json
+import requests
 
 def sanitize_name(name: str) -> str:
     """
@@ -44,6 +45,39 @@ def get_auth_headers(session_path):
     return header_string
 
 
+def get_1080p_stream_url(m3u8_url: str, headers: dict) -> str:
+    """
+    Fetches the master m3u8 playlist and returns the URL for the 1080p stream.
+    Returns the original m3u8_url if no 1080p stream is found.
+    """
+    try:
+        response = requests.get(m3u8_url, headers=headers)
+        response.raise_for_status()
+        
+        playlist_content = response.text
+        lines = playlist_content.strip().split('\n')
+        
+        stream_url = None
+        for i, line in enumerate(lines):
+            if "1080p" in line and i + 1 < len(lines):
+                stream_url = lines[i+1]
+                break
+        
+        if stream_url:
+            # If the URL is relative, construct the absolute URL
+            if not stream_url.startswith("http"):
+                base_url = m3u8_url.rsplit('/', 1)[0]
+                stream_url = f"{base_url}/{stream_url}"
+            print(f"[INFO] Found 1080p stream: {stream_url}")
+            return stream_url
+
+    except requests.RequestException as e:
+        print(f"[WARNING] Could not fetch or parse master playlist: {e}")
+    
+    print("[INFO] 1080p stream not found, using master m3u8 URL.")
+    return m3u8_url
+
+
 def start_recording(live_details, config):
     """
     Starts recording a live stream using ffmpeg directly with auto reconnect options.
@@ -83,13 +117,19 @@ def start_recording(live_details, config):
 
         # === Headers from cookies ===
         session_path = "/app/config/session.json"
-        headers = get_auth_headers(session_path)
+        ffmpeg_headers = get_auth_headers(session_path)
+        
+        # Convert ffmpeg header string to a dict for requests
+        request_headers = {line.split(": ")[0]: line.split(": ")[1] for line in ffmpeg_headers.strip().split('\n') if ": " in line}
+
+        # === Select 1080p stream ===
+        recording_url = get_1080p_stream_url(m3u8_url, request_headers)
 
         # === ffmpeg command ===
         command = [
             "ffmpeg",
             "-y",  # Overwrite
-            "-headers", headers.replace("\r\n", "\n"),
+            "-headers", ffmpeg_headers.replace("\r\n", "\n"),
             "-user_agent", "Mozilla/5.0",
             "-reconnect", "1",
             "-reconnect_streamed", "1",
@@ -98,7 +138,7 @@ def start_recording(live_details, config):
             "-rw_timeout", "15000000",
             "-timeout", "15000000",
             "-allowed_extensions", "ALL",
-            "-i", m3u8_url,
+            "-i", recording_url,
             "-c", "copy",
             "-fflags", "+genpts",
             output_path,
