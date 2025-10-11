@@ -22,3 +22,8 @@ venv/
 config.json
 *.json
 !/chzzk_recorder/config/config.json.example
+
+# Ignore all Markdown except README.md
+*.md
+!README.md
+

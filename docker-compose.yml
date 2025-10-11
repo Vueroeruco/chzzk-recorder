@@ -5,6 +5,10 @@ services:
     container_name: chzzk_recorder
     tty: true
     stdin_open: true
+    environment:
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - TZ=Asia/Seoul
     volumes:
       - ./chzzk_recorder/config:/app/config
       - ./chzzk_recorder/logs:/app/logs
