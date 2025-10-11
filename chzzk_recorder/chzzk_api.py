@@ -141,6 +141,48 @@ class ChzzkAPI:
         print(f"All retries failed for channel {channel_id}. Assuming offline.")
         return None
 
+    def get_channel_videos(self, channel_id: str, page: int = 0, size: int = 50, sort: str = "LATEST"):
+        """
+        Fetch VOD list for a channel. Returns a list of entries that contain at least 'videoId'.
+        The API structure may evolve, so parsing is defensive.
+        """
+        base = f"https://api.chzzk.naver.com/service/v1/channels/{channel_id}/videos"
+        params = {
+            'sortType': sort,
+            'pagingType': 'PAGE',
+            'page': str(page),
+            'size': str(size),
+            'publishDateAt': '',
+            'videoType': ''
+        }
+        try:
+            r = requests.get(base, headers=self.headers, params=params, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+
+            # Attempt to find a list of items that have 'videoId'
+            def extract_video_items(obj):
+                items = []
+                if isinstance(obj, dict):
+                    # If this level looks like a video entry
+                    if 'videoId' in obj:
+                        items.append(obj)
+                    for v in obj.values():
+                        items.extend(extract_video_items(v))
+                elif isinstance(obj, list):
+                    for it in obj:
+                        items.extend(extract_video_items(it))
+                return items
+
+            items = extract_video_items(data)
+            return items
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while fetching videos for {channel_id}: {e}")
+            return []
+        except Exception as e:
+            print(f"Failed to parse videos for {channel_id}: {e}")
+            return []
+
 if __name__ == '__main__':
     # Example usage:
     # Assumes the script is run from a directory where 'config' is a subdirectory.

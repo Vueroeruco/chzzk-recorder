@@ -36,7 +36,13 @@ def main_loop():
         return
 
     polling_interval = config.get("POLLING_INTERVAL_SECONDS", 30)
-    stall_restart_seconds = int(config.get("stall_restart_seconds", 180))
+    # Stall/fast restart settings
+    stall_restart_seconds = int(config.get("stall_restart_seconds", config.get("stall_seconds", 180)))
+    fast_restart_seconds = int(config.get("fast_restart_seconds", min(60, stall_restart_seconds)))
+    # Daily cleanup schedule (hour in local time)
+    cleanup_enabled = bool(config.get("cleanup_enabled", True))
+    cleanup_hour = int(config.get("cleanup_hour", 5))
+    last_cleanup_date = None
     last_refresh_hour = -1
 
     try:
@@ -93,7 +99,8 @@ def main_loop():
                     info['last_grow'] = now_ts
                 else:
                     # no growth
-                    if (now_ts - last_grow) >= stall_restart_seconds:
+                    threshold = min(stall_restart_seconds, fast_restart_seconds) if fast_restart_seconds else stall_restart_seconds
+                    if (now_ts - last_grow) >= threshold:
                         print(f"! Stall detected for '{info['channel_name']}' ({channel_id}). size={sz}, last_grow={int(now_ts - last_grow)}s >= {stall_restart_seconds}s. Restarting.")
                         try:
                             info['process'].kill()
@@ -104,6 +111,7 @@ def main_loop():
                         try:
                             det = api.get_live_details(channel_id)
                             if det and det.get('m3u8_url'):
+                                det['channelId'] = channel_id
                                 restarted = start_recording(det, config)
                                 if restarted and restarted.get('process'):
                                     currently_recording[channel_id] = {
@@ -119,7 +127,17 @@ def main_loop():
                         except Exception as e:
                             print(f"  -> Restart attempt failed: {e}")
 
-        # 3. Check Live Status
+        # 3. Daily Cleanup (once per day)
+        try:
+            if cleanup_enabled:
+                today = now.date()
+                if (last_cleanup_date is None or last_cleanup_date != today) and now.hour >= cleanup_hour:
+                    _run_daily_cleanup(api, config)
+                    last_cleanup_date = today
+        except Exception as e:
+            print(f"[CLEANUP] Error during daily cleanup scheduling: {e}")
+
+        # 4. Check Live Status
         try:
             live_channels_details = {cid: api.get_live_details(cid) for cid in target_ids}
             live_channels_details = {k: v for k, v in live_channels_details.items() if v}  # Filter out non-live
@@ -134,6 +152,7 @@ def main_loop():
         for channel_id in live_now_ids:
             if channel_id not in currently_recording:
                 details = live_channels_details[channel_id]
+                details['channelId'] = channel_id
                 channel_name = details.get("channelName", channel_id)
                 print(f"  -> New live stream detected for '{channel_name}' ({channel_id})")
 
@@ -153,7 +172,7 @@ def main_loop():
                 else:
                     print(f"     Failed to start recording for {channel_id}.")
 
-        # 5. Stop Old Recordings
+        # 6. Stop Old Recordings
         for channel_id in list(currently_recording.keys()):
             if channel_id not in live_now_ids:
                 recording_info = currently_recording[channel_id]
@@ -180,3 +199,76 @@ if __name__ == "__main__":
     # Change directory to the script's location
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     main_loop()
+
+# --- Helpers ---
+def _run_daily_cleanup(api: ChzzkAPI, config: dict):
+    """Check recorded TS files' metadata against VOD list; delete if VOD exists.
+    Runs once per day.
+    """
+    try:
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recordings')
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', datetime.datetime.now().strftime('%Y%m%d'))
+        os.makedirs(log_dir, exist_ok=True)
+        cleanup_log = os.path.join(log_dir, 'cleanup.log')
+
+        # Build map: channelId -> set(videoIds in VOD list)
+        vod_cache = {}
+
+        for root, dirs, files in os.walk(base_dir):
+            for fname in files:
+                if not fname.endswith('.meta.json'):
+                    continue
+                meta_path = os.path.join(root, fname)
+                try:
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                except Exception:
+                    continue
+
+                channel_id = meta.get('channelId')
+                video_id = meta.get('videoId')
+                out_path = meta.get('output')
+                if not channel_id or not video_id:
+                    continue
+
+                # Fetch and cache VOD list videoIds
+                if channel_id not in vod_cache:
+                    items = api.get_channel_videos(channel_id, page=0, size=50, sort='LATEST')
+                    vod_ids = {it.get('videoId') for it in items if isinstance(it, dict) and it.get('videoId')}
+                    vod_cache[channel_id] = vod_ids
+                else:
+                    vod_ids = vod_cache[channel_id]
+
+                if video_id in vod_ids:
+                    # Delete the TS file and meta
+                    reason = f"VOD exists for videoId={video_id}. Deleting local copy."
+                    try:
+                        if out_path and os.path.exists(out_path):
+                            os.remove(out_path)
+                    except Exception as e:
+                        reason += f" (file delete error: {e})"
+                    try:
+                        os.remove(meta_path)
+                    except Exception as e:
+                        reason += f" (meta delete error: {e})"
+                    _append_cleanup_log(cleanup_log, meta, reason)
+    except Exception as e:
+        print(f"[CLEANUP] Unexpected error: {e}")
+
+
+def _append_cleanup_log(cleanup_log: str, meta: dict, reason: str):
+    try:
+        with open(cleanup_log, 'a', encoding='utf-8') as lf:
+            line = {
+                'ts': datetime.datetime.now().isoformat(timespec='seconds'),
+                'channelId': meta.get('channelId'),
+                'channelName': meta.get('channelName'),
+                'videoId': meta.get('videoId'),
+                'title': meta.get('liveTitle'),
+                'output': meta.get('output'),
+                'reason': reason,
+            }
+            lf.write(json.dumps(line, ensure_ascii=False) + "\n")
+        print(f"[CLEANUP] {reason} -> {meta.get('output')}")
+    except Exception as e:
+        print(f"[CLEANUP] Failed to write cleanup log: {e}")

@@ -12,4 +12,8 @@
     "on_start_previous": "ignore",
     "archive_dir": "/app/recordings_archive",
     "session_path": "/app/config/session.json"
+    ,
+    "fast_restart_seconds": 30,
+    "cleanup_enabled": true,
+    "cleanup_hour": 5
 }

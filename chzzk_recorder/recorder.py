@@ -133,6 +133,8 @@ def start_recording(live_details: dict, config: Optional[dict] = None):
 
         # Output path (TS)
         out_path = streamer_dir / f"{basename}.ts"
+        # Sidecar metadata path
+        meta_path = streamer_dir / f"{basename}.meta.json"
 
         # N_m3u8DL-RE 병렬 다운로더 (우선 사용)
         if bool((config or {}).get('use_n_m3u8dlre', False)):
@@ -167,6 +169,22 @@ def start_recording(live_details: dict, config: Optional[dict] = None):
             ] + headers_cli
             print(f"[NMD] Start -> {out_path} (headers redacted)")
             proc = subprocess.Popen(cmd, stdout=perlog, stderr=perlog)
+            # Write sidecar metadata for later cleanup/reference
+            try:
+                meta = {
+                    'channelId': (live_details or {}).get('channelId'),
+                    'channelName': channel_name,
+                    'videoId': (live_details or {}).get('videoId'),
+                    'liveTitle': live_title,
+                    'm3u8_url': m3u8_url,
+                    'started_at': _dt.datetime.now().isoformat(timespec='seconds'),
+                    'output': str(out_path),
+                    'log_dir': str(log_dir),
+                }
+                with open(meta_path, 'w', encoding='utf-8') as mf:
+                    json.dump(meta, mf, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[WARN] Failed to write metadata sidecar: {e}")
             return {
                 'process': proc,
                 'output': str(out_path),

@@ -115,7 +115,12 @@ def main():
         "on_start_previous": "ignore",
         "archive_dir": "/app/recordings_archive",
         # 경로(명시적)
-        "session_path": "/app/config/session.json"
+        "session_path": "/app/config/session.json",
+        # 빠른 재시작(중단 감지)
+        "fast_restart_seconds": 30,
+        # 일일 정리 스케줄
+        "cleanup_enabled": True,
+        "cleanup_hour": 5
     }
 
     with open(config_path, "w", encoding="utf-8") as f:
