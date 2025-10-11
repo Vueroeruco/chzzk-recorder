@@ -100,11 +100,22 @@ def main():
         return
 
     # 3. Finalize and Save Config
+    # 기존 최소 옵션에서 실제 런타임에 사용하는 옵션들을 포함하도록 확장
     final_config = {
         "CHZZK_ID": chzzk_id,
         "CHZZK_PW": chzzk_pw,
         "TARGET_CHANNELS": target_channels,
-        "POLLING_INTERVAL_SECONDS": 30
+        # 폴링/헬스체크
+        "POLLING_INTERVAL_SECONDS": 30,
+        "stall_restart_seconds": 180,
+        # N_m3u8DL-RE 사용/튜닝
+        "use_n_m3u8dlre": True,
+        "n_m3u8dlre_threads": 8,
+        # 기존 파일 처리 정책: 'ignore' | 'archive' | 'delete'
+        "on_start_previous": "ignore",
+        "archive_dir": "/app/recordings_archive",
+        # 경로(명시적)
+        "session_path": "/app/config/session.json"
     }
 
     with open(config_path, "w", encoding="utf-8") as f:

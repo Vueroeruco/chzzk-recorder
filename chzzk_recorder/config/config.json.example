@@ -5,6 +5,11 @@
         "CHANNEL_ID_1",
         "CHANNEL_ID_2"
     ],
-    "DOWNLOAD_PATH": "/app/recordings",
-    "POLLING_INTERVAL_SECONDS": 30
+    "POLLING_INTERVAL_SECONDS": 30,
+    "stall_restart_seconds": 180,
+    "use_n_m3u8dlre": true,
+    "n_m3u8dlre_threads": 8,
+    "on_start_previous": "ignore",
+    "archive_dir": "/app/recordings_archive",
+    "session_path": "/app/config/session.json"
 }
