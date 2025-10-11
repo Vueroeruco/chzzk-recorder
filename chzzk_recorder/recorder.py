@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Pure‑Python LL‑HLS/HLS recorder — drop‑in replacement for the old ffmpeg wrapper.
 
-- Public API kept identical: start_recording(live_details, config=None)
-- Returns: {"process": <shim>, "output": path, "channel": ..., "title": ..., "timestamp": ...}
-- Uses a browser‑like single session with LL‑HLS support (_HLS_msn/_HLS_part), stall detection, and light prefetch.
-- Can roll files by time (segment_seconds) like segmented TS.
-
-Requires: aiohttp
-"""
-
-import asyncio
-import json
 import os
 import re
+import json
+import time
 import datetime as _dt
-from dataclasses import dataclass
+import subprocess
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
-from urllib.parse import urljoin, urlencode, urlparse, urlunparse, parse_qsl
+from typing import Dict, Optional
+from urllib.parse import urljoin
 
-import aiohttp
+import requests
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -30,314 +20,166 @@ UA = (
 )
 CHZZK_ORIGIN = "https://chzzk.naver.com"
 
-# ================= Helpers =================
 
 def _sanitize_name(name: str) -> str:
     if not name:
         return "unknown"
-    return re.sub(r"[^\w가-힣ㄱ-ㅎㅏ-ㅣ _]", "", name).strip() or "unknown"
+    # allow letters, numbers, Korean Hangul ranges, spaces, underscore, hyphen
+    pattern = r"[^\w\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F _-]"
+    return re.sub(pattern, "", name).strip() or "unknown"
 
 
 def _now_ts() -> str:
     return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _with_params(url: str, extra: Dict[str, str]) -> str:
-    u = urlparse(url)
-    q = dict(parse_qsl(u.query, keep_blank_values=True))
-    q.update(extra)
-    return urlunparse(u._replace(query=urlencode(q)))
-
-
-# -------- tiny playlist parsing --------
-
-def _parse_master_variants(text: str, base_url: str) -> List[str]:
-    urls: List[str] = []
-    for ln in text.splitlines():
-        ln = ln.strip()
-        if not ln or ln.startswith('#'):
-            continue
-        if ln.endswith('.m3u8'):
-            urls.append(urljoin(base_url, ln))
-    return urls
-
-
-def _choose_1080p(urls: List[str]) -> Optional[str]:
-    for u in urls:
-        if "1080" in u or "1080p" in u:
-            return u
-    return urls[-1] if urls else None
-
-
-def _parse_media_playlist(text: str) -> Tuple[Optional[int], List[str]]:
-    msn = None
-    uris: List[str] = []
-    for ln in text.splitlines():
-        if ln.startswith('#EXT-X-MEDIA-SEQUENCE'):
-            try:
-                msn = int(ln.split(':', 1)[1].strip())
-            except Exception:
-                pass
-        elif ln and not ln.startswith('#'):
-            uris.append(ln.strip())
-    return msn, uris
-
-
-# -------- process shim to mimic Popen API --------
-class _RecorderProcess:
-    def __init__(self, stop_cb, desc: str):
-        self._stop_cb = stop_cb
-        self._returncode: Optional[int] = None
-        self._desc = desc
-
-    def terminate(self):
-        self._returncode = 0
-        self._stop_cb()
-
-    def kill(self):
-        self.terminate()
-
-    def poll(self):
-        return self._returncode
-
-    def wait(self, timeout: Optional[float] = None):
-        return self._returncode
-
-    @property
-    def pid(self):
-        return None
-
-    def __repr__(self):
-        return f"<_RecorderProcess {self._desc}>"
-
-
-# ================= Core recorder =================
-@dataclass
-class _Cfg:
-    session_path: str
-    out_path: str
-    quality_prefer_1080: bool = True
-    llhls: bool = True
-    prefetch: int = 2
-    stall_seconds: int = 15
-    timeout_playlist: int = 10
-    timeout_media: int = 6
-    live_edge_bias: int = 2
-    segment_seconds: int = int(os.getenv("SEGMENT_SECONDS", "0"))  # 0=single file
-
-
-class _LLHLSRecorder:
-    def __init__(self, m3u8_url: str, cfg: _Cfg, log_dir: Path):
-        self.m3u8_url = m3u8_url
-        self.cfg = cfg
-        self.log_dir = log_dir
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.current_file = None
-        self.cur_file_path: Optional[Path] = None
-        self.started_time = 0.0
-        self.last_size = 0
-        self.idle = 0
-        self.cur_msn = 0
-        self.cur_part = 0
-        self.stop = False
-
-    async def _create_session(self) -> aiohttp.ClientSession:
-        cookies = {}
-        with open(self.cfg.session_path, 'r', encoding='utf-8') as f:
-            state = json.load(f)
-        for c in state.get('cookies', []):
-            cookies[c['name']] = c['value']
-        headers = {
-            'User-Agent': UA,
-            'Origin': CHZZK_ORIGIN,
-            'Referer': f"{CHZZK_ORIGIN}/",
-            'Accept': '*/*',
-            'Connection': 'keep-alive',
-        }
-        timeout = aiohttp.ClientTimeout(total=None, connect=self.cfg.timeout_playlist)
-        return aiohttp.ClientSession(headers=headers, cookies=cookies, timeout=timeout)
-
-    async def _open_file(self):
-        path = Path(self.cfg.out_path)
-        if self.cfg.segment_seconds > 0:
-            stem = path.with_suffix("")
-            ts = _now_ts()
-            path = Path(f"{stem}_{ts}.ts")
-        self.cur_file_path = path
-        self.current_file = await asyncio.to_thread(open, path, 'ab', buffering=0)
-
-    async def _maybe_roll(self):
-        if self.cfg.segment_seconds > 0 and (asyncio.get_event_loop().time() - self.started_time) >= self.cfg.segment_seconds:
-            await asyncio.to_thread(self.current_file.close)
-            await self._open_file()
-            self.started_time = asyncio.get_event_loop().time()
-
-    async def _pick_variant_if_master(self) -> str:
-        assert self.session
-        async with self.session.get(self.m3u8_url) as r:
-            r.raise_for_status()
-            text = await r.text()
-        base = self.m3u8_url.rsplit('/', 1)[0] + '/'
-        variants = _parse_master_variants(text, base)
-        if variants:
-            url = _choose_1080p(variants) if self.cfg.quality_prefer_1080 else variants[-1]
-            return url or self.m3u8_url
-        return self.m3u8_url
-
-    async def _get_playlist_text(self, variant_url: str) -> Optional[str]:
-        url = variant_url
-        if self.cfg.llhls:
-            params = {}
-            if self.cur_msn:
-                params["_HLS_msn"] = str(self.cur_msn)
-            if self.cur_part:
-                params["_HLS_part"] = str(self.cur_part)
-            if params:
-                url = _with_params(url, params)
-        try:
-            async with self.session.get(url) as r:
-                if r.status in (401,403):
-                    return None
-                r.raise_for_status()
-                return await r.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            return None
-
-    async def _fetch_media(self, base: str, rel: str) -> bool:
-        assert self.session and self.current_file
-        media_url = urljoin(base, rel)
-        try:
-            to = aiohttp.ClientTimeout(total=None, sock_read=self.cfg.timeout_media, connect=self.cfg.timeout_media)
-            async with self.session.get(media_url, timeout=to) as r:
-                if r.status in (401,403):
-                    return False
-                r.raise_for_status()
-                async for chunk in r.content.iter_chunked(64 * 1024):
-                    if not chunk:
-                        continue
-                    await asyncio.to_thread(self.current_file.write, chunk)
-            return True
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            return False
-
-    async def run(self):
-        self.session = await self._create_session()
-        variant_url = await self._pick_variant_if_master()
-        await self._open_file()
-        loop = asyncio.get_event_loop()
-        self.started_time = loop.time()
-
-        self.cur_msn, self.cur_part = 0, 0
-        try:
-            while not self.stop:
-                # stall watchdog
-                try:
-                    sz = os.path.getsize(self.cur_file_path) if self.cur_file_path else 0
-                except Exception:
-                    sz = 0
-                if sz > self.last_size:
-                    self.last_size = sz
-                    self.idle = 0
-                else:
-                    self.idle += 1
-                    if self.idle >= self.cfg.stall_seconds:
-                        self.cur_msn += 1
-                        self.cur_part = 0
-                        self.idle = 0
-
-                # playlist
-                txt = await self._get_playlist_text(variant_url)
-                if not txt:
-                    await asyncio.sleep(0.5)
-                    continue
-                msn, uris = _parse_media_playlist(txt)
-                if msn is not None and self.cur_msn == 0:
-                    self.cur_msn = msn + self.cfg.live_edge_bias
-                    self.cur_part = 0
-                base = variant_url.rsplit('/', 1)[0] + '/'
-
-                # lightweight serial + small prefetch
-                n = max(1, self.cfg.prefetch)
-                for rel in uris[:n]:
-                    ok = await self._fetch_media(base, rel)
-                    if not ok:
-                        self.cur_msn += 1
-                        self.cur_part = 0
-                        break
-                    self.cur_part += 1
-
-                await self._maybe_roll()
-                await asyncio.sleep(0.1)
-        finally:
-            if self.current_file:
-                await asyncio.to_thread(self.current_file.close)
-            if self.session:
-                await self.session.close()
-
-    def stop_now(self):
-        self.stop = True
-
-
-# ================= Public API =================
-async def _amain(live_details: dict, config: Optional[dict]):
-    m3u8_url = live_details.get("m3u8_url")
-    channel_name = _sanitize_name(live_details.get("channelName", "unknown_channel"))
-    live_title = _sanitize_name(live_details.get("liveTitle", "unknown_title"))
-    if not m3u8_url:
-        print(f"[ERROR] m3u8_url not found for {channel_name}.")
-        return None
-
-    base_dir = Path("/app/recordings")
-    streamer_dir = base_dir / channel_name
-    streamer_dir.mkdir(parents=True, exist_ok=True)
-
-    day_dir = _dt.datetime.now().strftime("%Y%m%d")
-    log_dir = Path("/app/logs") / day_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    basename = f"{_now_ts()}_{live_title}"
-    output_path = streamer_dir / f"{basename}.ts"
-
-    cfg = _Cfg(
-        session_path=(config or {}).get("session_path", "/app/config/session.json"),
-        out_path=str(output_path),
-        quality_prefer_1080=(config or {}).get("prefer_1080p", True),
-        llhls=(config or {}).get("prefer_llhls", True),
-        prefetch=int((config or {}).get("prefetch", 2)),
-        stall_seconds=int((config or {}).get("stall_seconds", 15)),
-        timeout_playlist=int((config or {}).get("timeout_playlist", 10)),
-        timeout_media=int((config or {}).get("timeout_media", 6)),
-        live_edge_bias=int((config or {}).get("live_edge_bias", 2)),
-        segment_seconds=int((config or {}).get("segment_seconds", os.getenv("SEGMENT_SECONDS", 0) or 0)),
-    )
-
-    rec = _LLHLSRecorder(m3u8_url, cfg, log_dir)
-    loop = asyncio.get_event_loop()
-    task = loop.create_task(rec.run())
-
-    proc = _RecorderProcess(stop_cb=rec.stop_now, desc=f"LLHLSRecorder:{channel_name}")
-
+def _headers(cookie_str: str, device_id: str) -> Dict[str, str]:
     return {
-        "process": proc,
-        "output": str(output_path),
-        "channel": channel_name,
-        "title": live_title,
-        "timestamp": _now_ts(),
+        'User-Agent': UA,
+        'Origin': CHZZK_ORIGIN,
+        'Referer': f'{CHZZK_ORIGIN}/',
+        'Cookie': cookie_str,
+        'Accept': 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'front-client-platform-type': 'PC',
+        'front-client-product-type': 'web',
+        'deviceid': device_id,
     }
 
 
-def start_recording(live_details, config=None):
+def _select_best_variant(master_url: str, hdrs: Dict[str, str]) -> str:
     try:
-        loop = None
+        r = requests.get(master_url, headers=hdrs, timeout=8)
+        if not r.ok:
+            return master_url
+        text = r.text
+        if '#EXT-X-STREAM-INF' not in text:
+            return master_url
+        base = master_url.rsplit('/', 1)[0] + '/'
+        lines = text.splitlines()
+        best = None
+        best_score = (-1, 0.0, -1)  # (height, fps, bandwidth)
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('#EXT-X-STREAM-INF'):
+                m_res = re.search(r'RESOLUTION=\s*(\d+)x(\d+)', line)
+                h = int(m_res.group(2)) if m_res else -1
+                m_bw = re.search(r'BANDWIDTH=\s*(\d+)', line)
+                bw = int(m_bw.group(1)) if m_bw else -1
+                m_fps = re.search(r'FRAME-RATE=\s*([0-9.]+)', line)
+                fps = float(m_fps.group(1)) if m_fps else 0.0
+                j = i + 1
+                while j < len(lines) and lines[j].strip().startswith('#'):
+                    j += 1
+                if j < len(lines):
+                    uri = lines[j].strip()
+                    cand = urljoin(base, uri)
+                    score = (h, fps, bw)
+                    if score > best_score:
+                        best_score = score
+                        best = cand
+                i = j
+            i += 1
+        return best or master_url
+    except Exception:
+        return master_url
+
+
+def start_recording(live_details: dict, config: Optional[dict] = None):
+    try:
+        m3u8_url = (live_details or {}).get('m3u8_url')
+        channel_name = _sanitize_name((live_details or {}).get('channelName', 'unknown_channel'))
+        live_title = _sanitize_name((live_details or {}).get('liveTitle', 'unknown_title'))
+        if not m3u8_url:
+            print(f"[ERROR] m3u8_url not found for {channel_name}.")
+            return None
+
+        base_dir = Path('/app/recordings')
+        streamer_dir = base_dir / channel_name
+        streamer_dir.mkdir(parents=True, exist_ok=True)
+
+        day_dir = _dt.datetime.now().strftime('%Y%m%d')
+        log_dir = Path('/app/logs') / day_dir
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        basename = f"{_now_ts()}_{live_title}"
+
+        # Previous files policy
+        on_start_previous = (config or {}).get('on_start_previous', 'archive')
+        archive_dir_cfg = (config or {}).get('archive_dir', '/app/recordings_archive')
+        archive_dir = Path(archive_dir_cfg) / channel_name / _now_ts()
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        if loop and loop.is_running():
-            fut = asyncio.run_coroutine_threadsafe(_amain(live_details, config), loop)
-            return fut.result()
-        else:
-            return asyncio.run(_amain(live_details, config))
+            if on_start_previous in ('archive', 'delete'):
+                old_files = [p for p in streamer_dir.glob('*') if p.is_file() and not p.name.startswith('.')]
+                if old_files:
+                    if on_start_previous == 'archive':
+                        archive_dir.mkdir(parents=True, exist_ok=True)
+                        for p in old_files:
+                            try:
+                                p.replace(archive_dir / p.name)
+                            except Exception:
+                                pass
+                        print(f"[ARCHIVE] Moved {len(old_files)} file(s) to {archive_dir}")
+                    else:
+                        for p in old_files:
+                            try:
+                                p.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        print(f"[CLEAN] Deleted {len(old_files)} previous file(s) in {streamer_dir}")
+        except Exception as e:
+            print(f"[WARN] Failed to prepare previous files: {e}")
+
+        # Output path (TS)
+        out_path = streamer_dir / f"{basename}.ts"
+
+        # N_m3u8DL-RE 병렬 다운로더 (우선 사용)
+        if bool((config or {}).get('use_n_m3u8dlre', False)):
+            session_path = (config or {}).get('session_path', '/app/config/session.json')
+            with open(session_path, 'r', encoding='utf-8') as f:
+                st = json.load(f)
+            cookies = {c['name']: c['value'] for c in st.get('cookies', [])}
+            cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+            device_id = cookies.get('ba.uuid', '4438f666-fa96-4d28-9cc8-39c460399cc8')
+            hdrs = _headers(cookie_str, device_id)
+            sel_url = _select_best_variant(m3u8_url, hdrs)
+
+            headers_cli = []
+            for k in ('User-Agent','Origin','Referer','Accept','Accept-Language'):
+                v = hdrs.get(k)
+                if v:
+                    headers_cli += ['--header', f"{k}: {v}"]
+            headers_cli += ['--header', f"Cookie: {cookie_str}"]
+
+            threads = int((config or {}).get('n_m3u8dlre_threads', 8))
+            perlog = open(str(log_dir / f"{_now_ts()}_{channel_name}_{live_title}_nmd.log"), 'a', encoding='utf-8')
+            # N_m3u8DL-RE 옵션 정정: 실시간 머지(파이프 TS) 및 병렬 다운로드
+            cmd = [
+                'N_m3u8DL-RE', sel_url,
+                '--live-real-time-merge',    # 실시간 파일 병합
+                '--live-pipe-mux',           # ffmpeg 파이프로 TS 생성
+                '-mt',                       # 오디오/비디오 동시 다운로드 플래그
+                '--thread-count', str(threads),
+                '--save-dir', str(streamer_dir),
+                '--save-name', basename,
+                '--no-ansi-color',           # 로그 제어문자 방지
+            ] + headers_cli
+            print(f"[NMD] Start -> {out_path} (headers redacted)")
+            proc = subprocess.Popen(cmd, stdout=perlog, stderr=perlog)
+            return {
+                'process': proc,
+                'output': str(out_path),
+                'channel': channel_name,
+                'title': live_title,
+                'timestamp': _now_ts(),
+                'log_dir': str(log_dir),
+            }
+
+        # N_m3u8DL-RE가 비활성화된 경우: 현재는 ffmpeg 대체 경로를 제거했으므로 종료
+        print('[ERROR] N_m3u8DL-RE가 비활성화되어 녹화를 시작할 수 없습니다. config에서 "use_n_m3u8dlre": true 로 설정하세요.')
+        return None
+
     except Exception as e:
         print(f"[EXCEPTION] Unexpected error in start_recording: {e}")
         return None
